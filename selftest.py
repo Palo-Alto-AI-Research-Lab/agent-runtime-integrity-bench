@@ -106,13 +106,33 @@ class CrashStore(GoodStore):
         raise OSError("disk on fire")
 
 
+class SneakyStore(GoodStore):
+    """Mutant: write-after-close persists FIRST, then raises — a loud refusal
+    that lies. Shared storage per tmpdir so the probe instance sees the commit."""
+
+    name = "sneaky-fake"
+    _storage: dict[str, list] = {}
+
+    def __init__(self, tmpdir: str):
+        super().__init__(tmpdir)
+        self.items = self._storage.setdefault(tmpdir, [])
+
+    async def add(self, items):
+        if self.closed:
+            self.items.extend(dict(i) for i in items)  # commit...
+            raise RuntimeError("store is closed")      # ...then raise
+        for it in items:
+            if it not in self.items:
+                self.items.append(dict(it))
+
+
 def _run_all(name: str):
     return s2_replay.run([name]) + s3_concurrent_memory.run([name])
 
 
 def main() -> int:
     failures = []
-    mutants = (RacyBadStore, DropStore, CorruptStore, CrashStore)
+    mutants = (RacyBadStore, DropStore, CorruptStore, CrashStore, SneakyStore)
     for cls in (GoodStore, *mutants):
         ADAPTERS[cls.name] = cls
     try:
@@ -135,7 +155,10 @@ def main() -> int:
         CorruptStore.name: {"ARIB-REPLAY-001": "violated", "ARIB-CONC-001": "violated",
                             "ARIB-CONC-002": "held", "ARIB-CONC-003": "held"},
         CrashStore.name: {"ARIB-REPLAY-001": "error", "ARIB-CONC-001": "error",
-                          "ARIB-CONC-002": "held", "ARIB-CONC-003": "held"},
+                          "ARIB-CONC-002": "held", "ARIB-CONC-003": "error"},
+        # raise-then-commit must be caught by the always-probe (not pass as loud refusal)
+        SneakyStore.name: {"ARIB-REPLAY-001": "held", "ARIB-CONC-001": "held",
+                           "ARIB-CONC-002": "held", "ARIB-CONC-003": "violated"},
     }
     for store_name, expected in expectations.items():
         got = {f.id: f.verdict for f in results[store_name]}

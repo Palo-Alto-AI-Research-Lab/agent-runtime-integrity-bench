@@ -89,10 +89,17 @@ The harness proves it can tell good from bad before you trust it:
 ```
 
 runs every check against a correct in-memory store (everything must hold) and
-against four mutants carrying the defect classes above — close-race, silent
-resurrection, silent drop, corrupted content, and a crashing store (a dying
-check must produce an `error` finding, not kill the run). The judge must
-catch all of them.
+against five mutants carrying the defect classes above — close-race, silent
+resurrection, silent drop, corrupted content, a crashing store (a dying check
+must produce an `error` finding, not kill the run), and a raise-then-commit
+store (a "loud refusal" that persists anyway must not pass — the storage is
+probed even when the write raises). The judge must catch all of them.
+
+Known oracle limits (kept honest rather than hidden): ARIB-CONC-002 asserts
+"no exception under concurrent close" — it does not yet verify post-close
+resource state, and its interleaving relies on the runtime yielding inside
+`close()`; a close that never awaits would serialize and pass this check
+while still being unsafe under preemptive scheduling.
 
 ## Adding a runtime
 
@@ -108,7 +115,12 @@ Code written with an AI agent (Claude); a human verified: the checks were run
 live on the versions stated, the AsyncSQLiteSession source was read to confirm
 the mechanism (check-outside-lock, missing `_closed` flag), the self-test
 mutant fails and the real runs are reproducible (3 consecutive identical
-verdict sets). Not verified: behavior on Windows, on Python ≠ 3.12, or under
-free-threaded builds.
+verdict sets). Not verified: behavior on Windows, on Python ≠ 3.12, under free-threaded
+builds, or on alternative event loops (uvloop) — the 20/20 close-race
+determinism relies on the await-inside-the-lock suspension point and was
+measured on stock asyncio only. Known selftest gap: mutants cover wrong
+verdicts, not hangs (a store deadlocking on SQLite busy_timeout would stall
+the run rather than fail it) — a per-check wall-clock timeout is on the
+roadmap.
 
 License: MIT.

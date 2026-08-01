@@ -27,9 +27,21 @@ from .core import VERDICT_HELD, VERDICT_VIOLATED, Finding
 N_WORKERS = 8
 ITEMS_PER_WORKER = 25
 CLOSE_TRIALS = 20
+CONC_TRIALS = 3
 
 
-async def _conc_writes(adapter_cls, tmpdir) -> Finding:
+def _key(content) -> str:
+    """Stable identity for a stored content value. A store may hand back a
+    non-hashable structure (list/dict) — that must become a verdict about the
+    content, not a TypeError in the judge (external-review finding, 2026-08-01)."""
+    if isinstance(content, str):
+        return content
+    import json
+
+    return "nonstr:" + json.dumps(content, sort_keys=True, ensure_ascii=False, default=repr)
+
+
+async def _conc_writes_once(adapter_cls, tmpdir) -> dict:
     store = adapter_cls(tmpdir)
     errors: list[str] = []
 
@@ -45,29 +57,40 @@ async def _conc_writes(adapter_cls, tmpdir) -> Finding:
     await store.close()
 
     expected_set = {f"w{w}-i{i}" for w in range(N_WORKERS) for i in range(ITEMS_PER_WORKER)}
-    expected = len(expected_set)
-    contents = [i.get("content") for i in items]
-    missing = expected_set - set(contents)      # lost updates
-    extras = set(contents) - expected_set       # corrupted/foreign records
-    dupes = len(contents) - len(set(contents))
-    ok = not errors and not missing and not extras and dupes == 0
+    contents = [_key(i.get("content")) for i in items]
+    return {
+        "missing": len(expected_set - set(contents)),
+        "extras": sorted(set(contents) - expected_set)[:5],
+        "duplicates": len(contents) - len(set(contents)),
+        "visible": len(contents),
+        "errors": errors[:5],
+    }
+
+
+async def _conc_writes(adapter_cls, tmpdir) -> Finding:
+    expected = N_WORKERS * ITEMS_PER_WORKER
+    trials = []
+    for t in range(CONC_TRIALS):
+        d = os.path.join(tmpdir, f"t{t}")
+        os.makedirs(d, exist_ok=True)
+        trials.append(await _conc_writes_once(adapter_cls, d))
+    bad = [t for t in trials
+           if t["errors"] or t["missing"] or t["extras"] or t["duplicates"]]
+    ok = not bad
     return Finding(
         id="ARIB-CONC-001",
         scenario="s3",
         adapter=adapter_cls.name,
         invariant=f"{expected} concurrent appends -> {expected} visible items, 0 lost, 0 duplicated",
-        fault=f"{N_WORKERS} concurrent writers x {ITEMS_PER_WORKER} appends each",
+        fault=f"{N_WORKERS} concurrent writers x {ITEMS_PER_WORKER} appends each, {CONC_TRIALS} trials",
         verdict=VERDICT_HELD if ok else VERDICT_VIOLATED,
         evidence={
-            "expected": expected,
-            "visible": len(contents),
-            "lost_updates": len(missing),
-            "corrupted_or_foreign": sorted(extras)[:5],
-            "duplicates": dupes,
-            "writer_errors": errors[:5],
+            "expected_per_trial": expected,
+            "trials": trials,
+            "failing_trials": len(bad),
         },
-        trials=1,
-        violations=0 if ok else 1,
+        trials=CONC_TRIALS,
+        violations=len(bad),
     )
 
 
@@ -108,30 +131,31 @@ async def _after_close(adapter_cls, tmpdir) -> Finding:
         await store.add([_msg("after-close")])
     except Exception as e:  # noqa: BLE001
         raised = f"{type(e).__name__}: {e}"
-    visible = False
-    if raised is None:
-        probe = adapter_cls(tmpdir)
+    # ALWAYS probe storage, even when the write raised: a store that persists
+    # first and raises second would otherwise pass as a loud refusal while the
+    # invariant is dead (external-review finding, 2026-08-01).
+    probe = adapter_cls(tmpdir)
+    try:
         visible = any(i.get("content") == "after-close" for i in await probe.get_all())
+    finally:
         await probe.close()
-        # the silently-resurrected connection is still open at this point;
-        # close it so it doesn't outlive the event loop (it otherwise crashes
-        # the aiosqlite worker thread at interpreter shutdown — more evidence
-        # the caller no longer controls the store's lifecycle)
-        try:
-            await store.close()
-        except Exception:  # noqa: BLE001
-            pass
+    # the silently-resurrected connection may still be open at this point;
+    # close it so it doesn't outlive the event loop (it otherwise crashes
+    # the aiosqlite worker thread at interpreter shutdown — more evidence
+    # the caller no longer controls the store's lifecycle)
+    try:
+        await store.close()
+    except Exception:  # noqa: BLE001
+        pass
 
-    # Both silent outcomes violate the invariant. Silent commit = state split
-    # (caller believes the session is closed, the runtime resurrected a
-    # connection and keeps writing). Silent drop = data loss reported as
-    # success. Only a loud refusal (exception) holds.
-    if raised is not None:
-        mode = "loud_refusal"
-    elif visible:
-        mode = "silent_commit"
+    # Only a loud refusal WITHOUT persistence holds. Raise-but-committed and
+    # silent commit are both state splits (caller believes the session is
+    # closed / the write failed, yet state changed). Silent drop = data loss
+    # reported as success.
+    if visible:
+        mode = "raise_but_committed" if raised else "silent_commit"
     else:
-        mode = "silent_drop"
+        mode = "loud_refusal" if raised else "silent_drop"
     ok = mode == "loud_refusal"
     return Finding(
         id="ARIB-CONC-003",

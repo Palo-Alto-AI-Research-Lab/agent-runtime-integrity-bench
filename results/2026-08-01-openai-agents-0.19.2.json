@@ -1,0 +1,193 @@
+{
+  "bench": "agent-runtime-integrity-bench",
+  "run_date": "2026-08-01",
+  "environment": {
+    "python": "3.12.13",
+    "platform": "macOS-26.3.1-x86_64-i386-64bit",
+    "openai-agents": "0.19.2",
+    "aiosqlite": "0.22.1"
+  },
+  "findings": [
+    {
+      "id": "ARIB-REPLAY-001",
+      "scenario": "s2",
+      "adapter": "sqlite",
+      "invariant": "redelivered batch (same logical message) is visible exactly once",
+      "fault": "add_items(batch) called twice, simulating retry after lost ACK",
+      "verdict": "violated",
+      "evidence": {
+        "visible_occurrences": 2,
+        "note": "no idempotency key in the add_items contract -> at-least-once delivery duplicates history"
+      },
+      "trials": 1,
+      "violations": 1
+    },
+    {
+      "id": "ARIB-REPLAY-001",
+      "scenario": "s2",
+      "adapter": "async-sqlite",
+      "invariant": "redelivered batch (same logical message) is visible exactly once",
+      "fault": "add_items(batch) called twice, simulating retry after lost ACK",
+      "verdict": "violated",
+      "evidence": {
+        "visible_occurrences": 2,
+        "note": "no idempotency key in the add_items contract -> at-least-once delivery duplicates history"
+      },
+      "trials": 1,
+      "violations": 1
+    },
+    {
+      "id": "ARIB-CONC-001",
+      "scenario": "s3",
+      "adapter": "sqlite",
+      "invariant": "200 concurrent appends -> 200 visible items, 0 lost, 0 duplicated",
+      "fault": "8 concurrent writers x 25 appends each, 3 trials",
+      "verdict": "held",
+      "evidence": {
+        "expected_per_trial": 200,
+        "trials": [
+          {
+            "missing": 0,
+            "extras": [],
+            "duplicates": 0,
+            "visible": 200,
+            "errors": []
+          },
+          {
+            "missing": 0,
+            "extras": [],
+            "duplicates": 0,
+            "visible": 200,
+            "errors": []
+          },
+          {
+            "missing": 0,
+            "extras": [],
+            "duplicates": 0,
+            "visible": 200,
+            "errors": []
+          }
+        ],
+        "failing_trials": 0
+      },
+      "trials": 3,
+      "violations": 0
+    },
+    {
+      "id": "ARIB-CONC-002",
+      "scenario": "s3",
+      "adapter": "sqlite",
+      "invariant": "close() is idempotent under concurrency: two concurrent close() never raise",
+      "fault": "2 concurrent close() calls, 20 trials",
+      "verdict": "held",
+      "evidence": {
+        "trials": 20,
+        "failing_trials": 0,
+        "sample_errors": []
+      },
+      "trials": 20,
+      "violations": 0
+    },
+    {
+      "id": "ARIB-CONC-003",
+      "scenario": "s3",
+      "adapter": "sqlite",
+      "invariant": "a write after close() is refused loudly (exception), never silently committed or dropped",
+      "fault": "add_items() after close()",
+      "verdict": "held",
+      "evidence": {
+        "exception_on_write": "RuntimeError: SQLiteSession is closed",
+        "write_visible_in_storage": false,
+        "outcome_mode": "loud_refusal"
+      },
+      "trials": 1,
+      "violations": 0
+    },
+    {
+      "id": "ARIB-CONC-001",
+      "scenario": "s3",
+      "adapter": "async-sqlite",
+      "invariant": "200 concurrent appends -> 200 visible items, 0 lost, 0 duplicated",
+      "fault": "8 concurrent writers x 25 appends each, 3 trials",
+      "verdict": "held",
+      "evidence": {
+        "expected_per_trial": 200,
+        "trials": [
+          {
+            "missing": 0,
+            "extras": [],
+            "duplicates": 0,
+            "visible": 200,
+            "errors": []
+          },
+          {
+            "missing": 0,
+            "extras": [],
+            "duplicates": 0,
+            "visible": 200,
+            "errors": []
+          },
+          {
+            "missing": 0,
+            "extras": [],
+            "duplicates": 0,
+            "visible": 200,
+            "errors": []
+          }
+        ],
+        "failing_trials": 0
+      },
+      "trials": 3,
+      "violations": 0
+    },
+    {
+      "id": "ARIB-CONC-002",
+      "scenario": "s3",
+      "adapter": "async-sqlite",
+      "invariant": "close() is idempotent under concurrency: two concurrent close() never raise",
+      "fault": "2 concurrent close() calls, 20 trials",
+      "verdict": "violated",
+      "evidence": {
+        "trials": 20,
+        "failing_trials": 20,
+        "sample_errors": [
+          {
+            "trial": 0,
+            "errors": [
+              "AttributeError: 'NoneType' object has no attribute 'close'"
+            ]
+          },
+          {
+            "trial": 1,
+            "errors": [
+              "AttributeError: 'NoneType' object has no attribute 'close'"
+            ]
+          },
+          {
+            "trial": 2,
+            "errors": [
+              "AttributeError: 'NoneType' object has no attribute 'close'"
+            ]
+          }
+        ]
+      },
+      "trials": 20,
+      "violations": 20
+    },
+    {
+      "id": "ARIB-CONC-003",
+      "scenario": "s3",
+      "adapter": "async-sqlite",
+      "invariant": "a write after close() is refused loudly (exception), never silently committed or dropped",
+      "fault": "add_items() after close()",
+      "verdict": "violated",
+      "evidence": {
+        "exception_on_write": null,
+        "write_visible_in_storage": true,
+        "outcome_mode": "silent_commit"
+      },
+      "trials": 1,
+      "violations": 1
+    }
+  ]
+}

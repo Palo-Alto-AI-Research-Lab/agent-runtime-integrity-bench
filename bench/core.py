@@ -77,6 +77,11 @@ def environment() -> dict[str, str]:
 
 
 def emit(findings: list[Finding], json_path: str | None, run_date: str) -> int:
+    # zero findings = the harness did no work; a disabled/empty run must never
+    # look like a clean one (CI would count exit 0 as "all invariants held")
+    if not findings:
+        print("ERROR: no checks ran (empty scenario/adapter selection?)", file=sys.stderr)
+        return 4
     report = {
         "bench": "agent-runtime-integrity-bench",
         "run_date": run_date,
