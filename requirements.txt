@@ -1,0 +1,2 @@
+openai-agents>=0.19
+aiosqlite
