@@ -53,9 +53,17 @@ async def _replay(adapter_cls, tmpdir) -> Finding:
     )
 
 
+from .core import run_check  # noqa: E402
+
+
 def run(adapter_names: list[str]) -> list[Finding]:
     findings: list[Finding] = []
     for name in adapter_names:
         with tempfile.TemporaryDirectory(prefix="arib-s2-") as tmpdir:
-            findings.append(asyncio.run(_replay(ADAPTERS[name], tmpdir)))
+            findings.append(run_check(
+                lambda n=name, t=tmpdir: asyncio.run(_replay(ADAPTERS[n], t)),
+                check_name="ARIB-REPLAY-001",
+                scenario="s2",
+                adapter=name,
+            ))
     return findings

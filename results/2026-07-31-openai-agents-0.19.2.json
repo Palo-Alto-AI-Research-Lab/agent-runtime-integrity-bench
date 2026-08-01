@@ -47,6 +47,7 @@
         "expected": 200,
         "visible": 200,
         "lost_updates": 0,
+        "corrupted_or_foreign": [],
         "duplicates": 0,
         "writer_errors": []
       },
@@ -72,13 +73,13 @@
       "id": "ARIB-CONC-003",
       "scenario": "s3",
       "adapter": "sqlite",
-      "invariant": "a write after close() is refused loudly (exception), never silently committed",
+      "invariant": "a write after close() is refused loudly (exception), never silently committed or dropped",
       "fault": "add_items() after close()",
       "verdict": "held",
       "evidence": {
         "exception_on_write": "RuntimeError: SQLiteSession is closed",
         "write_visible_in_storage": false,
-        "note": "silent commit = state split: caller believes session closed, runtime keeps a resurrected connection writing"
+        "outcome_mode": "loud_refusal"
       },
       "trials": 1,
       "violations": 0
@@ -94,6 +95,7 @@
         "expected": 200,
         "visible": 200,
         "lost_updates": 0,
+        "corrupted_or_foreign": [],
         "duplicates": 0,
         "writer_errors": []
       },
@@ -138,13 +140,13 @@
       "id": "ARIB-CONC-003",
       "scenario": "s3",
       "adapter": "async-sqlite",
-      "invariant": "a write after close() is refused loudly (exception), never silently committed",
+      "invariant": "a write after close() is refused loudly (exception), never silently committed or dropped",
       "fault": "add_items() after close()",
       "verdict": "violated",
       "evidence": {
         "exception_on_write": null,
         "write_visible_in_storage": true,
-        "note": "silent commit = state split: caller believes session closed, runtime keeps a resurrected connection writing"
+        "outcome_mode": "silent_commit"
       },
       "trials": 1,
       "violations": 1

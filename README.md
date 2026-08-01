@@ -31,7 +31,7 @@ only when we can pair it with a real incident and a real runtime to test.
 |---|---|---|
 | ARIB-CONC-001 | N concurrent appends → N visible items, 0 lost, 0 duplicated | 8 concurrent writers × 25 appends |
 | ARIB-CONC-002 | `close()` is idempotent under concurrency | 2 concurrent `close()`, 20 trials |
-| ARIB-CONC-003 | write-after-close is refused loudly, never silently committed | `add_items()` after `close()` |
+| ARIB-CONC-003 | write-after-close is refused loudly, never silently committed or dropped | `add_items()` after `close()` |
 | ARIB-REPLAY-001 | redelivered batch is visible exactly once | same batch delivered twice (retry after lost ACK) |
 
 A violated invariant is not automatically a bug in the runtime — a store may

@@ -44,11 +44,13 @@ async def _conc_writes(adapter_cls, tmpdir) -> Finding:
     items = await store.get_all()
     await store.close()
 
-    expected = N_WORKERS * ITEMS_PER_WORKER
+    expected_set = {f"w{w}-i{i}" for w in range(N_WORKERS) for i in range(ITEMS_PER_WORKER)}
+    expected = len(expected_set)
     contents = [i.get("content") for i in items]
-    lost = expected - len(set(contents))
+    missing = expected_set - set(contents)      # lost updates
+    extras = set(contents) - expected_set       # corrupted/foreign records
     dupes = len(contents) - len(set(contents))
-    ok = not errors and lost == 0 and dupes == 0
+    ok = not errors and not missing and not extras and dupes == 0
     return Finding(
         id="ARIB-CONC-001",
         scenario="s3",
@@ -59,7 +61,8 @@ async def _conc_writes(adapter_cls, tmpdir) -> Finding:
         evidence={
             "expected": expected,
             "visible": len(contents),
-            "lost_updates": lost,
+            "lost_updates": len(missing),
+            "corrupted_or_foreign": sorted(extras)[:5],
             "duplicates": dupes,
             "writer_errors": errors[:5],
         },
@@ -119,26 +122,41 @@ async def _after_close(adapter_cls, tmpdir) -> Finding:
         except Exception:  # noqa: BLE001
             pass
 
-    # The dangerous outcome is the SILENT one: no exception AND the write is
-    # visible in storage — the caller believes the session is closed while the
-    # runtime resurrected a connection and committed state behind its back.
-    silent_commit = raised is None and visible
+    # Both silent outcomes violate the invariant. Silent commit = state split
+    # (caller believes the session is closed, the runtime resurrected a
+    # connection and keeps writing). Silent drop = data loss reported as
+    # success. Only a loud refusal (exception) holds.
+    if raised is not None:
+        mode = "loud_refusal"
+    elif visible:
+        mode = "silent_commit"
+    else:
+        mode = "silent_drop"
+    ok = mode == "loud_refusal"
     return Finding(
         id="ARIB-CONC-003",
         scenario="s3",
         adapter=adapter_cls.name,
-        invariant="a write after close() is refused loudly (exception), never silently committed",
+        invariant="a write after close() is refused loudly (exception), never silently committed or dropped",
         fault="add_items() after close()",
-        verdict=VERDICT_HELD if not silent_commit else VERDICT_VIOLATED,
+        verdict=VERDICT_HELD if ok else VERDICT_VIOLATED,
         evidence={
             "exception_on_write": raised,
             "write_visible_in_storage": bool(visible),
-            "note": "silent commit = state split: caller believes session closed, "
-                    "runtime keeps a resurrected connection writing",
+            "outcome_mode": mode,
         },
         trials=1,
-        violations=0 if not silent_commit else 1,
+        violations=0 if ok else 1,
     )
+
+
+from .core import run_check  # noqa: E402
+
+_CHECK_IDS = {
+    "_conc_writes": "ARIB-CONC-001",
+    "_close_race": "ARIB-CONC-002",
+    "_after_close": "ARIB-CONC-003",
+}
 
 
 def run(adapter_names: list[str]) -> list[Finding]:
@@ -147,5 +165,10 @@ def run(adapter_names: list[str]) -> list[Finding]:
         cls = ADAPTERS[name]
         for check in (_conc_writes, _close_race, _after_close):
             with tempfile.TemporaryDirectory(prefix="arib-s3-") as tmpdir:
-                findings.append(asyncio.run(check(cls, tmpdir)))
+                findings.append(run_check(
+                    lambda c=check, t=tmpdir: asyncio.run(c(cls, t)),
+                    check_name=_CHECK_IDS[check.__name__],
+                    scenario="s3",
+                    adapter=name,
+                ))
     return findings

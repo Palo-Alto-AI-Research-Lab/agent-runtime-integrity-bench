@@ -43,17 +43,19 @@ class Finding:
         return dataclasses.asdict(self)
 
 
-def run_check(fn: Callable[[], Finding]) -> Finding:
-    """Crash-guard: a harness bug must surface as 'error', not as a verdict."""
+def run_check(fn: Callable[[], Finding], *, check_name: str, scenario: str,
+              adapter: str) -> Finding:
+    """Crash-guard around one check: a harness/adapter bug must surface as an
+    'error' finding for THAT check, without discarding the other findings."""
     try:
         return fn()
-    except BaseException:  # noqa: BLE001 - deliberate: capture harness death
+    except BaseException:  # noqa: BLE001 - deliberate: capture check death
         return Finding(
-            id=getattr(fn, "check_id", fn.__name__),
-            scenario=getattr(fn, "scenario", "?"),
-            adapter=getattr(fn, "adapter", "?"),
-            invariant=getattr(fn, "invariant", "?"),
-            fault=getattr(fn, "fault", "?"),
+            id=check_name,
+            scenario=scenario,
+            adapter=adapter,
+            invariant="(check did not complete)",
+            fault="(check did not complete)",
             verdict=VERDICT_ERROR,
             evidence={"harness_traceback": traceback.format_exc()},
         )

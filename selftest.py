@@ -75,34 +75,84 @@ class RacyBadStore:
         self._conn = None
 
 
+class DropStore(GoodStore):
+    """Mutant: write-after-close silently drops the item (success, no persist)."""
+
+    name = "drop-fake"
+
+    async def add(self, items):
+        if self.closed:
+            return  # silent drop, reported as success
+        await GoodStore.add(self, items)
+
+
+class CorruptStore(GoodStore):
+    """Mutant: persists unique garbage instead of the caller's content."""
+
+    name = "corrupt-fake"
+    _n = 0
+
+    async def add(self, items):
+        CorruptStore._n += 1
+        await GoodStore.add(self, [{"role": "user", "content": f"garbage-{CorruptStore._n}"}])
+
+
+class CrashStore(GoodStore):
+    """Mutant: get_all() raises — one check's death must not kill the run."""
+
+    name = "crash-fake"
+
+    async def get_all(self):
+        raise OSError("disk on fire")
+
+
+def _run_all(name: str):
+    return s2_replay.run([name]) + s3_concurrent_memory.run([name])
+
+
 def main() -> int:
     failures = []
-
-    ADAPTERS[GoodStore.name] = GoodStore
-    ADAPTERS[RacyBadStore.name] = RacyBadStore
+    mutants = (RacyBadStore, DropStore, CorruptStore, CrashStore)
+    for cls in (GoodStore, *mutants):
+        ADAPTERS[cls.name] = cls
     try:
-        good = s2_replay.run([GoodStore.name]) + s3_concurrent_memory.run([GoodStore.name])
-        bad = s2_replay.run([RacyBadStore.name]) + s3_concurrent_memory.run([RacyBadStore.name])
+        good = _run_all(GoodStore.name)
+        results = {cls.name: _run_all(cls.name) for cls in mutants}
     finally:
-        ADAPTERS.pop(GoodStore.name, None)
-        ADAPTERS.pop(RacyBadStore.name, None)
+        for cls in (GoodStore, *mutants):
+            ADAPTERS.pop(cls.name, None)
 
     for f in good:
         if f.verdict != "held":
             failures.append(f"good store flagged: {f.id} -> {f.verdict} {f.evidence}")
-    expect_bad = {"ARIB-REPLAY-001", "ARIB-CONC-002", "ARIB-CONC-003"}
-    for f in bad:
-        want = "violated" if f.id in expect_bad else "held"
-        if f.verdict != want:
-            failures.append(f"bad store: {f.id} -> {f.verdict}, expected {want}")
+
+    expectations = {
+        RacyBadStore.name: {"ARIB-REPLAY-001": "violated", "ARIB-CONC-001": "held",
+                            "ARIB-CONC-002": "violated", "ARIB-CONC-003": "violated"},
+        DropStore.name: {"ARIB-REPLAY-001": "held", "ARIB-CONC-001": "held",
+                         "ARIB-CONC-002": "held", "ARIB-CONC-003": "violated"},
+        # both inherit GoodStore's loud write-after-close refusal -> CONC-003 held
+        CorruptStore.name: {"ARIB-REPLAY-001": "violated", "ARIB-CONC-001": "violated",
+                            "ARIB-CONC-002": "held", "ARIB-CONC-003": "held"},
+        CrashStore.name: {"ARIB-REPLAY-001": "error", "ARIB-CONC-001": "error",
+                          "ARIB-CONC-002": "held", "ARIB-CONC-003": "held"},
+    }
+    for store_name, expected in expectations.items():
+        got = {f.id: f.verdict for f in results[store_name]}
+        for check_id, want in expected.items():
+            if got.get(check_id) != want:
+                failures.append(f"{store_name}: {check_id} -> {got.get(check_id)}, expected {want}")
+        if len(results[store_name]) != 4:
+            failures.append(f"{store_name}: {len(results[store_name])} findings emitted, expected 4")
 
     if failures:
         print("SELFTEST FAIL")
         for line in failures:
             print(" -", line)
         return 1
-    print(f"SELFTEST OK: {len(good)} checks held on good store, "
-          f"{sum(1 for f in bad if f.verdict == 'violated')} violations caught on mutant")
+    caught = sum(1 for fs in results.values() for f in fs if f.verdict in ("violated", "error"))
+    print(f"SELFTEST OK: {len(good)} checks held on good store; "
+          f"{caught} defects/errors caught across {len(mutants)} mutants")
     return 0
 
 
