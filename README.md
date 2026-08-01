@@ -89,8 +89,10 @@ The harness proves it can tell good from bad before you trust it:
 ```
 
 runs every check against a correct in-memory store (everything must hold) and
-against a mutant with the exact defect classes above (the judge must catch
-all of them).
+against four mutants carrying the defect classes above — close-race, silent
+resurrection, silent drop, corrupted content, and a crashing store (a dying
+check must produce an `error` finding, not kill the run). The judge must
+catch all of them.
 
 ## Adding a runtime
 
