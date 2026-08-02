@@ -1,5 +1,8 @@
 # agent-runtime-integrity-bench
 
+[![selftest](https://github.com/Palo-Alto-AI-Research-Lab/agent-runtime-integrity-bench/actions/workflows/selftest.yml/badge.svg)](https://github.com/Palo-Alto-AI-Research-Lab/agent-runtime-integrity-bench/actions/workflows/selftest.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Integrity scenarios for agent runtimes, distilled from real incidents in a
 production multi-machine agent fleet — replayed as deterministic, one-command
 checks against real SDKs.
@@ -40,18 +43,41 @@ The benchmark's job is to make the actual semantics **measurable and
 explicit**, because agent code in the wild routinely assumes exactly-once and
 assumes closed means closed.
 
-## Results — openai-agents 0.19.2 (2026-07-31, Python 3.12.13, macOS)
+## Results — openai-agents 0.19.2 (2026-08-02, Python 3.12.13, macOS)
 
-Adapters: `SQLiteSession` (sync sqlite3) and `AsyncSQLiteSession` (aiosqlite)
-from `openai/openai-agents-python`. Raw report:
-[`results/2026-07-31-openai-agents-0.19.2.json`](results/2026-07-31-openai-agents-0.19.2.json).
+Four session backends from `openai/openai-agents-python`, all four fronting
+the same `Session` protocol and documented as drop-in replacements for each
+other. Raw report:
+[`results/2026-08-02-openai-agents-0.19.2.json`](results/2026-08-02-openai-agents-0.19.2.json)
+(16 findings: 8 held, 6 violated, 2 not applicable). Earlier two-adapter runs
+are kept as dated evidence about that day's scope, not rewritten.
 
-| Check | SQLiteSession | AsyncSQLiteSession |
-|---|---|---|
-| ARIB-CONC-001 concurrent appends | ✅ held | ✅ held |
-| ARIB-CONC-002 concurrent close | ✅ held | ❌ violated — `AttributeError: 'NoneType' object has no attribute 'close'` in **20/20 trials** |
-| ARIB-CONC-003 write-after-close | ✅ held (`RuntimeError: SQLiteSession is closed`) | ❌ violated — write silently committed to a resurrected connection; the leaked connection then outlives the event loop |
-| ARIB-REPLAY-001 replay dedup | ❌ violated (2 copies visible) | ❌ violated (2 copies visible) |
+| Check | SQLiteSession | AsyncSQLiteSession | AdvancedSQLiteSession | SQLAlchemySession |
+|---|---|---|---|---|
+| ARIB-CONC-001 concurrent appends | ✅ held | ✅ held | ✅ held | ✅ held |
+| ARIB-CONC-002 concurrent close | ✅ held | ❌ violated — `AttributeError: 'NoneType' object has no attribute 'close'` in **20/20 trials** | ✅ held | ⚪ n/a ⁽*⁾ |
+| ARIB-CONC-003 write-after-close | ✅ held (`RuntimeError: SQLiteSession is closed`) | ❌ violated — write silently committed to a resurrected connection; the leaked connection then outlives the event loop | ✅ held (inherits the loud refusal) | ⚪ n/a ⁽*⁾ |
+| ARIB-REPLAY-001 replay dedup | ❌ violated (2 copies visible) | ❌ violated (2 copies visible) | ❌ violated (2 copies visible) | ❌ violated (2 copies visible) |
+
+⁽*⁾ **`SQLAlchemySession` has no `close()`** — and neither does the `Session`
+protocol: two of these four drop-in-compatible backends expose one, two do
+not. The harness gives that adapter a stand-in `close()` (`engine.dispose()`)
+only to release resources between trials, and the close-semantics checks
+**abstain** rather than grade it: SQLAlchemy documents `dispose()` as
+replacing the pool with the engine still usable, so a write that succeeds
+afterwards is documented behaviour, not silent resurrection. Grading it would
+have produced a red cell against a promise the library never made — the first
+external review of this change caught exactly that, and the abstention is now
+enforced by a self-test mutant.
+
+The measurable fact survives the correction, and it is about the protocol
+rather than any one class: an application swapping session backends "drop-in"
+also swaps whether *closed* exists at all.
+
+Replay is the one result that is unanimous: **no backend deduplicates**, and
+none claims to — `add_items()` has no idempotency key anywhere in the
+protocol. Exactly-once is the caller's job in all four, which is worth knowing
+before a retried tool-call writes a transfer into history twice.
 
 The two `AsyncSQLiteSession` findings independently reproduce
 [openai/openai-agents-python#3983](https://github.com/openai/openai-agents-python/issues/3983)
@@ -66,16 +92,36 @@ the same failure class as our 25-day ledger split** — the caller believes the
 store is closed/finished, the runtime keeps writing somewhere the caller no
 longer watches.
 
-## Run it
+## Quickstart
 
 ```
+git clone https://github.com/Palo-Alto-AI-Research-Lab/agent-runtime-integrity-bench
+cd agent-runtime-integrity-bench
 python3.12 -m venv .venv
-.venv/bin/pip install openai-agents aiosqlite
+.venv/bin/pip install -r requirements.txt   # 3 of 4 backends
 .venv/bin/python run_bench.py
 ```
 
-Options: `--scenario s2|s3`, `--adapter sqlite|async-sqlite`,
-`--json results/run.json`.
+Three minutes, no API key, no network, no model call — the scenarios exercise
+session storage, not an LLM.
+
+`requirements-full.txt` adds SQLAlchemy and is what CI installs and what the
+published results were measured with. With only the core install, the
+`sqlalchemy` adapter is **named on stderr as skipped and listed in the report
+under `skipped_adapters`**, and the rest still run; asking for it by name
+exits 4 instead. A backend that did not run must never read as a backend that
+passed — including to whatever reads the JSON later.
+
+Options: `--scenario s2|s3`, `--adapter sqlite|async-sqlite|advanced-sqlite|sqlalchemy`,
+`--json results/run.json`, `--run-date YYYY-MM-DD`.
+
+Verdicts are `held`, `violated`, `error` — and `not_applicable`, for a
+contract the runtime never claimed. Abstaining is a first-class outcome here:
+it is recorded in the report and printed in the summary, never dropped, and a
+report in which *every* check abstained exits 4 rather than 0, because nothing
+was measured. An adapter cannot use it to dodge grading, either — the "this
+runtime has no close()" claim is checked against the runtime object, and a
+false claim is a harness error, not an abstention.
 
 Exit codes are part of the contract: `0` all invariants held · `1` violations
 found and reported · `4` the harness itself failed. A dead harness must never
@@ -89,11 +135,16 @@ The harness proves it can tell good from bad before you trust it:
 ```
 
 runs every check against a correct in-memory store (everything must hold) and
-against five mutants carrying the defect classes above — close-race, silent
+against seven mutants carrying the defect classes above — close-race, silent
 resurrection, silent drop, corrupted content, a crashing store (a dying check
-must produce an `error` finding, not kill the run), and a raise-then-commit
-store (a "loud refusal" that persists anyway must not pass — the storage is
-probed even when the write raises). The judge must catch all of them.
+must produce an `error` finding, not kill the run), a raise-then-commit store
+(a "loud refusal" that persists anyway must not pass — the storage is probed
+even when the write raises), a store with no `close()` at all (the close
+checks must abstain, not invent a verdict), and one that *lies* about having
+no `close()` (the abstention must be refused as a harness error). The judge
+must get all of them right, and the report-layer guards — empty report and
+all-abstained report both exit 4 — are asserted directly, since no CLI
+invocation can reach them.
 
 Known oracle limits (kept honest rather than hidden): ARIB-CONC-002 asserts
 "no exception under concurrent close" — it does not yet verify post-close
@@ -104,9 +155,16 @@ while still being unsafe under preemptive scheduling.
 ## Adding a runtime
 
 One adapter class in [`bench/adapters.py`](bench/adapters.py) with three async
-methods: `add(items)`, `get_all()`, `close()`. Planned next:
-`pydantic-ai` message history and `modelcontextprotocol/python-sdk` session
-layer.
+methods: `add(items)`, `get_all()`, `close()` — plus an optional
+`available()` if it needs a dependency the core install doesn't carry. If the
+runtime has no `close()` of its own, set `native_close = False`: the close
+checks will abstain instead of grading a stand-in the harness invented.
+
+Planned next: `pydantic-ai` message history and
+`modelcontextprotocol/python-sdk` session layer. The remaining openai-agents
+backends (`RedisSession`, `MongoDBSession`, `DaprSession`, `EncryptedSession`)
+need a live service or key and are deliberately not stubbed — a mocked
+backend would produce a verdict about the mock.
 
 ## Provenance & disclosure
 
@@ -122,6 +180,20 @@ measured on stock asyncio only. Known selftest gap: mutants cover wrong
 verdicts, not hangs (a store deadlocking on SQLite busy_timeout would stall
 the run rather than fail it) — a per-check wall-clock timeout is on the
 roadmap.
+
+**2026-08-02 additions** (`advanced-sqlite` and `sqlalchemy` adapters, CI,
+this results file) were produced by the agent without a human in the loop, and
+are labelled that way on purpose. What backs them: every verdict comes from a
+live run on the versions stated in the report; the run was repeated and the
+verdict set was identical; the dependency-missing paths were exercised in a
+clean environment without SQLAlchemy installed (skipped-by-name → exit 1 with
+the skip recorded in the report, named explicitly → exit 4); the self-test
+covers all six mutants. They also went through an external code review before
+publication, which rejected the first version of the `SQLAlchemySession`
+result as a manufactured finding — that objection is why those two cells read
+`n/a` above instead of red. What does **not** back them: a second pair of
+*human* eyes. Treat the two new adapters as reproducible-and-machine-reviewed
+until that happens.
 
 License: MIT.
 

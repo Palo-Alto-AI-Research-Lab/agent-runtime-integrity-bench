@@ -18,7 +18,13 @@ does not go in.** "This could theoretically break" is a good issue and a bad ben
   needs.
 - `run_bench.py` — the entry point. `--scenario`, `--adapter`, `--json`, `--run-date`.
 - `bench/core.py` — finding model and report emission.
-- `bench/adapters.py` — one adapter per runtime under test; `ADAPTERS` is the registry.
+- `bench/adapters.py` — one adapter per runtime under test; `ADAPTERS` is the registry. An
+  adapter needing a dependency outside `requirements.txt`'s core install declares
+  `available()`; `is_available()` treats everything else as runnable, because `selftest.py`
+  injects fake stores into the same registry.
+- `.github/workflows/selftest.yml` — CI. `selftest.py` is the gate (stdlib only, 3 Python
+  versions); the benchmark itself runs but only **exit 4** fails the job. Wiring exit 1 to red
+  would train everyone to ignore red, since exit 1 is the benchmark working.
 - `bench/s2_replay.py`, `bench/s3_concurrent_memory.py` — the scenarios.
 - `selftest.py` — runs both scenarios against a correct fake store and a deliberately broken one.
 - `results/` — dated raw reports. Append, never rewrite: an old result is evidence about an old
@@ -46,6 +52,11 @@ into `results/` with the real date, the runtime version, and the platform.
   published result refers to it.
 - A violated invariant is **not automatically a bug in the runtime.** A store may document
   at-least-once semantics. Report what the semantics *are*; do not editorialise them into a defect.
+- **Never grade a contract the runtime does not claim.** If the library documents the behaviour
+  you are about to call a violation, the check must abstain (`not_applicable`), not go red — a
+  benchmark that manufactures findings is worth less than no benchmark. Abstention is verified
+  against the runtime object, so it cannot be used to dodge a check; `results/` records it and
+  `skipped_adapters` records what never ran at all.
 - Deterministic runs. No wall-clock dependence, no network, no ordering assumptions beyond what the
   scenario states.
 
