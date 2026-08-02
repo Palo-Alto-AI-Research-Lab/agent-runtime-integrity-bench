@@ -52,6 +52,11 @@ other. Raw report:
 (16 findings: 8 held, 6 violated, 2 not applicable). Earlier two-adapter runs
 are kept as dated evidence about that day's scope, not rewritten.
 
+The same run on CI — Ubuntu, glibc 2.39, same versions — produced
+[an identical report](results/2026-08-02-linux-openai-agents-0.19.2.json):
+all 16 verdicts and all violation counts match the macOS run, including the
+20/20 close-race. These are not one-machine results.
+
 | Check | SQLiteSession | AsyncSQLiteSession | AdvancedSQLiteSession | SQLAlchemySession |
 |---|---|---|---|---|
 | ARIB-CONC-001 concurrent appends | ✅ held | ✅ held | ✅ held | ✅ held |
@@ -173,10 +178,12 @@ Code written with an AI agent (Claude); a human verified: the checks were run
 live on the versions stated, the AsyncSQLiteSession source was read to confirm
 the mechanism (check-outside-lock, missing `_closed` flag), the self-test
 mutant fails and the real runs are reproducible (3 consecutive identical
-verdict sets). Not verified: behavior on Windows, on Python ≠ 3.12, under free-threaded
-builds, or on alternative event loops (uvloop) — the 20/20 close-race
-determinism relies on the await-inside-the-lock suspension point and was
-measured on stock asyncio only. Known selftest gap: mutants cover wrong
+verdict sets). Since 2026-08-02 the checks also run on CI: the self-test on
+Python 3.10/3.12/3.13 and the full benchmark on Ubuntu, which reproduced all
+16 macOS verdicts exactly. Still not verified: Windows, free-threaded builds,
+and alternative event loops (uvloop) — the 20/20 close-race determinism relies
+on the await-inside-the-lock suspension point and has been measured on stock
+asyncio only, on two platforms. Known selftest gap: mutants cover wrong
 verdicts, not hangs (a store deadlocking on SQLite busy_timeout would stall
 the run rather than fail it) — a per-check wall-clock timeout is on the
 roadmap.
