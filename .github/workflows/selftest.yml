@@ -1,0 +1,73 @@
+name: selftest
+
+# A check nobody runs is not a check. selftest.py proves the judge can still
+# tell a correct store from a broken one; it is stdlib-only, so it runs on
+# every push and on a weekly schedule regardless of the runtime under test.
+#
+# The benchmark itself is NOT run here as a pass/fail gate: exit 1 means
+# "violations found and reported", which is the benchmark working. Only exit 4
+# (harness died) is a failure. See README, "Run it".
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"   # Mondays, 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    name: harness self-test (stdlib only)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: selftest — must exit 0
+        run: python selftest.py
+
+  bench:
+    name: bench against real runtimes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install the runtimes under test
+        run: pip install -r requirements-full.txt   # all four backends, incl. SQLAlchemy
+      - name: record versions actually measured
+        # `|| true`: a no-match grep exits 1 and would fail the step over
+        # bookkeeping. The report carries the authoritative versions anyway.
+        run: pip freeze | grep -Ei "^(openai-agents|aiosqlite|sqlalchemy)=" | tee versions.txt || true
+      - name: run the benchmark
+        # 0 = all invariants held, 1 = violations found and reported (expected
+        # today). ONLY those two pass. Anything else — 4 (harness error), 2
+        # (bad arguments), 137 (OOM kill), a signal — fails the job. An
+        # allow-list, not a deny-list: "fail only on 4" would let every
+        # unexpected death through green.
+        run: |
+          set +e
+          python run_bench.py --json ci-report.json
+          code=$?
+          echo "run_bench exit code: $code"
+          case "$code" in
+            0|1) exit 0 ;;
+            4)   echo "::error::harness error (exit 4) — not a finding, a broken harness"; exit 1 ;;
+            *)   echo "::error::unexpected exit code $code — the harness died in a way it does not model"; exit 1 ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-report-linux-py312
+          path: |
+            ci-report.json
+            versions.txt
