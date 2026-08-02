@@ -21,8 +21,8 @@ import asyncio
 import os
 import tempfile
 
-from .adapters import ADAPTERS, _msg
-from .core import VERDICT_HELD, VERDICT_VIOLATED, Finding
+from .adapters import ADAPTERS, _msg, has_native_close, runtime_object
+from .core import VERDICT_ERROR, VERDICT_HELD, VERDICT_NA, VERDICT_VIOLATED, Finding
 
 N_WORKERS = 8
 ITEMS_PER_WORKER = 25
@@ -94,7 +94,59 @@ async def _conc_writes(adapter_cls, tmpdir) -> Finding:
     )
 
 
+def _no_close_finding(adapter_cls, tmpdir: str, check_id: str, invariant: str) -> Finding:
+    """The adapter claims the runtime defines no close(); abstain instead of
+    grading the harness's own stand-in for one.
+
+    The claim is VERIFIED, not trusted: `native_close = False` would otherwise
+    be a way for any adapter to dodge the two hardest checks (external review,
+    2026-08-02). If the underlying runtime object does expose a callable
+    close(), the abstention is false and that is a harness error, not an
+    abstention — it must be as loud as a broken check.
+    """
+    runtime = runtime_object(adapter_cls(tmpdir))
+    actual_close = getattr(runtime, "close", None)
+    if callable(actual_close):
+        return Finding(
+            id=check_id,
+            scenario="s3",
+            adapter=adapter_cls.name,
+            invariant=invariant,
+            fault="(not injected: adapter declared native_close = False)",
+            verdict=VERDICT_ERROR,
+            evidence={
+                "harness_error": "adapter declares native_close = False, but the "
+                                 f"runtime object {type(runtime).__name__} exposes a "
+                                 "callable close() — the abstention is false and the "
+                                 "check must not be skipped",
+            },
+            trials=0,
+            violations=0,
+        )
+    return Finding(
+        id=check_id,
+        scenario="s3",
+        adapter=adapter_cls.name,
+        invariant=invariant,
+        fault="(not injected: runtime exposes no close())",
+        verdict=VERDICT_NA,
+        evidence={
+            "reason": "this backend defines no close(), and the Session protocol "
+                      "does not require one; the adapter's close() is a harness "
+                      "stand-in for resource cleanup, so grading it would "
+                      "measure our shim, not the runtime",
+            "verified": f"{type(runtime).__name__} has no callable close()",
+        },
+        trials=0,
+        violations=0,
+    )
+
+
 async def _close_race(adapter_cls, tmpdir) -> Finding:
+    if not has_native_close(adapter_cls):
+        return _no_close_finding(
+            adapter_cls, tmpdir, "ARIB-CONC-002",
+            "close() is idempotent under concurrency: two concurrent close() never raise")
     failures = []
     for trial in range(CLOSE_TRIALS):
         d = os.path.join(tmpdir, f"t{trial}")
@@ -123,6 +175,11 @@ async def _close_race(adapter_cls, tmpdir) -> Finding:
 
 
 async def _after_close(adapter_cls, tmpdir) -> Finding:
+    if not has_native_close(adapter_cls):
+        return _no_close_finding(
+            adapter_cls, tmpdir, "ARIB-CONC-003",
+            "a write after close() is refused loudly (exception), never silently "
+            "committed or dropped")
     store = adapter_cls(tmpdir)
     await store.add([_msg("before-close")])
     await store.close()
