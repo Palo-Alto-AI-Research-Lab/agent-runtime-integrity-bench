@@ -1,2 +1,4 @@
+# Core install: everything needed to run the benchmark against the session
+# backends that ship with openai-agents and need no extra service.
 openai-agents>=0.19
 aiosqlite

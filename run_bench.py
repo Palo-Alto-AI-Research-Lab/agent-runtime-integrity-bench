@@ -17,7 +17,7 @@ import datetime
 import sys
 
 from bench import core, s2_replay, s3_concurrent_memory
-from bench.adapters import ADAPTERS
+from bench.adapters import ADAPTERS, is_available
 
 SCENARIOS = {
     "s2": s2_replay.run,
@@ -36,12 +36,24 @@ def main() -> int:
 
     scenarios = list(SCENARIOS) if args.scenario == "all" else [args.scenario]
     adapters = list(ADAPTERS) if args.adapter == "all" else [args.adapter]
+
+    # A missing optional dependency is not a finding. Skipped adapters are
+    # named on stderr (a silent skip would read as "this backend passed"),
+    # and naming one explicitly is a harness error, not a clean run.
+    unavailable = [n for n in adapters if not is_available(ADAPTERS[n])]
+    if unavailable and args.adapter != "all":
+        print(f"ERROR: adapter '{args.adapter}' is unavailable "
+              f"(missing optional dependency; see requirements.txt)", file=sys.stderr)
+        return 4
+    if unavailable:
+        print(f"SKIPPED (dependency not installed): {', '.join(unavailable)}", file=sys.stderr)
+        adapters = [n for n in adapters if n not in unavailable]
     run_date = args.run_date or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
     findings = []
     for s in scenarios:
         findings.extend(SCENARIOS[s](adapters))
-    return core.emit(findings, args.json_path, run_date)
+    return core.emit(findings, args.json_path, run_date, skipped_adapters=unavailable)
 
 
 if __name__ == "__main__":

@@ -2,10 +2,15 @@
 
 Stdlib only. Every check produces a Finding with a verdict:
 
-  held     - the invariant held under fault injection
-  violated - the invariant was violated (found-and-reported; this is the
-             benchmark doing its job, not the benchmark failing)
-  error    - the harness itself failed (never conflate with 'violated')
+  held            - the invariant held under fault injection
+  violated        - the invariant was violated (found-and-reported; this is the
+                    benchmark doing its job, not the benchmark failing)
+  error           - the harness itself failed (never conflate with 'violated')
+  not_applicable  - the runtime offers no such contract to test (e.g. a store
+                    with no close()). Recorded, never silently dropped, and
+                    never counted as either a pass or a defect: asserting an
+                    invariant a library never claimed is how a benchmark
+                    manufactures findings.
 
 Exit codes of run_bench.py follow the same discipline:
   0 = all invariants held, 1 = >=1 violation found and reported,
@@ -25,13 +30,14 @@ from typing import Any, Callable
 VERDICT_HELD = "held"
 VERDICT_VIOLATED = "violated"
 VERDICT_ERROR = "error"
+VERDICT_NA = "not_applicable"
 
 
 @dataclasses.dataclass
 class Finding:
     id: str                      # e.g. ARIB-CONC-002
     scenario: str                # s2 | s3
-    adapter: str                 # sqlite | async-sqlite
+    adapter: str                 # sqlite | async-sqlite | advanced-sqlite | sqlalchemy
     invariant: str               # human-readable invariant statement
     fault: str                   # what fault was injected
     verdict: str                 # held | violated | error
@@ -68,7 +74,7 @@ def environment() -> dict[str, str]:
         "python": sys.version.split()[0],
         "platform": platform.platform(),
     }
-    for pkg in ("openai-agents", "aiosqlite"):
+    for pkg in ("openai-agents", "aiosqlite", "sqlalchemy"):
         try:
             env[pkg] = md.version(pkg)
         except md.PackageNotFoundError:
@@ -76,16 +82,25 @@ def environment() -> dict[str, str]:
     return env
 
 
-def emit(findings: list[Finding], json_path: str | None, run_date: str) -> int:
+def emit(findings: list[Finding], json_path: str | None, run_date: str,
+         skipped_adapters: list[str] | None = None) -> int:
     # zero findings = the harness did no work; a disabled/empty run must never
-    # look like a clean one (CI would count exit 0 as "all invariants held")
+    # look like a clean one (CI would count exit 0 as "all invariants held").
+    # Same for a run whose every finding is not_applicable: nothing was
+    # actually measured.
     if not findings:
         print("ERROR: no checks ran (empty scenario/adapter selection?)", file=sys.stderr)
+        return 4
+    if all(f.verdict == VERDICT_NA for f in findings):
+        print("ERROR: every check was not_applicable — nothing was measured", file=sys.stderr)
         return 4
     report = {
         "bench": "agent-runtime-integrity-bench",
         "run_date": run_date,
         "environment": environment(),
+        # what did NOT run belongs in the report too: an omitted adapter and a
+        # passing adapter look identical to anything reading only findings[]
+        "skipped_adapters": list(skipped_adapters or []),
         "findings": [f.to_dict() for f in findings],
     }
     text = json.dumps(report, indent=2, ensure_ascii=False)
@@ -95,9 +110,12 @@ def emit(findings: list[Finding], json_path: str | None, run_date: str) -> int:
     print(text)
 
     print("\n== summary ==", file=sys.stderr)
+    for name in report["skipped_adapters"]:
+        print(f"SKIP {name:<18} adapter unavailable — NOT measured", file=sys.stderr)
     worst = 0
     for f in findings:
-        mark = {"held": "OK  ", "violated": "VIOL", "error": "ERR "}[f.verdict]
+        mark = {"held": "OK  ", "violated": "VIOL", "error": "ERR ",
+                "not_applicable": "N/A "}[f.verdict]
         print(f"{mark} {f.id:<18} [{f.adapter}] {f.invariant}", file=sys.stderr)
         if f.verdict == VERDICT_VIOLATED:
             worst = max(worst, 1)

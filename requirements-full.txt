@@ -1,0 +1,5 @@
+# Everything in the core install, plus the optional dependency of the
+# `sqlalchemy` adapter. This is what CI installs and what the published
+# results were measured with.
+-r requirements.txt
+sqlalchemy[asyncio]
