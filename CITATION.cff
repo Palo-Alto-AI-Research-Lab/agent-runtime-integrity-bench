@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use agent-runtime-integrity-bench in research or software, please cite it as below."
+title: "agent-runtime-integrity-bench: integrity scenarios for agent runtimes"
+type: software
+authors:
+  - family-names: Dziatkovskii
+    given-names: Anton
+    orcid: "https://orcid.org/0000-0001-7408-3054"
+    affiliation: "Palo Alto AI Research Lab"
+repository-code: "https://github.com/Palo-Alto-AI-Research-Lab/agent-runtime-integrity-bench"
+url: "https://github.com/Palo-Alto-AI-Research-Lab/agent-runtime-integrity-bench"
+license: MIT
+keywords:
+  - AI agents
+  - benchmark
+  - concurrency
+  - idempotency
+  - silent failure
+  - agent memory
+abstract: >-
+  A benchmark that injects faults and checks runtime invariants directly, rather
+  than measuring task success — because the agent-runtime failures that matter are
+  silent, with every component reporting success while an invariant is dead.
+  Scenarios are modelled on dated incidents from a production multi-machine agent
+  fleet: concurrent memory writes (lost updates, close-races, silent state
+  resurrection after close) and replay/idempotency (a redelivered batch applied
+  twice). Verdicts are held / violated / error / not_applicable, with abstention a
+  first-class outcome, and the harness self-tests against seven mutants to prove it
+  can tell good from bad. Published results cover four openai-agents session
+  backends, reproduced identically on macOS and Linux.
