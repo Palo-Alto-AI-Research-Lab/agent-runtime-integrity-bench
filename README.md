@@ -165,6 +165,31 @@ until that happens.
 
 License: MIT.
 
+## Roadmap
+
+**Now — [v0.1.0](https://github.com/Palo-Alto-AI-Research-Lab/agent-runtime-integrity-bench/releases/tag/v0.1.0).**
+Two scenarios, four invariants, four adapters against `openai-agents` 0.19.2; every published
+verdict is a dated JSON file under `results/`, reproduced identically on macOS and on CI Ubuntu.
+
+**Next**, in the order we would take them:
+
+- **Six more scenarios from the same incident log** — crash before state-commit, timeout after
+  partial progress, citation provenance, history tampering, consensus divergence, human-approval
+  timeout. The rule that keeps this honest: a scenario ships only when we can pair it with a real
+  incident *and* a real runtime to test it against, which is why `bench/` holds two today.
+- **A second runtime family.** Everything measured so far is one SDK. A benchmark that has only
+  ever been pointed at one library has not yet been shown to measure the library rather than us.
+- **Human eyes on the two newest adapters.** `AdvancedSQLiteSession` and `SQLAlchemySession` are
+  reproducible-and-machine-reviewed; the README says so per claim, and that is a gap, not a style.
+- **Platforms we do not cover:** Windows, free-threaded builds, uvloop.
+  `RedisSession` / `MongoDBSession` / `DaprSession` / `EncryptedSession` need a live service and
+  are deliberately *not* stubbed — a mock would only produce a verdict about the mock.
+
+Every noticeable change ships as a new release, and a result about someone else's library is a
+noticeable change: the
+[release feed](https://github.com/Palo-Alto-AI-Research-Lab/agent-runtime-integrity-bench/releases)
+is where the scope of what we have actually measured is recorded.
+
 ## AI contributors
 
 This project is built by a human + AI team, and the git log says so: Claude
